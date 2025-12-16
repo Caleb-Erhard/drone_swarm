@@ -494,14 +494,33 @@ class MissionPlanner:
         target_area = area_poly.area / num_drones
 
         def make_sector(a1: float, a2: float) -> Polygon:
-            # construct triangular sector wedge from reference point
-            bounds = area_poly.bounds
-            max_x = max(abs(bounds[0] - start_point.x), abs(bounds[2] - start_point.x))
-            max_y = max(abs(bounds[1] - start_point.y), abs(bounds[3] - start_point.y))
-            radius = np.sqrt(max_x**2 + max_y**2) * 1.5
-            p1 = (start_point.x + radius * cos(a1), start_point.y + radius * sin(a1))
-            p2 = (start_point.x + radius * cos(a2), start_point.y + radius * sin(a2))
-            return Polygon([start_point.coords[0], p1, p2])
+            # compute a radius that is guaranteed to reach beyond the mission polygon
+            coords = list(area_poly.exterior.coords)
+            max_dist = 0.0
+            for (vx, vy) in coords:
+                dx = vx - start_point.x
+                dy = vy - start_point.y
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist > max_dist:
+                    max_dist = dist
+
+            if max_dist <= 0.0:
+                max_dist = 1.0
+
+            radius = max_dist * 2.0
+
+            # Create sector with enough points to properly intersect
+            # Use more points for better intersection behavior
+            num_points = 50
+            sector_points = [start_point.coords[0]]
+            
+            for i in range(num_points + 1):
+                angle = a1 + (a2 - a1) * i / num_points
+                px = start_point.x + radius * cos(angle)
+                py = start_point.y + radius * sin(angle)
+                sector_points.append((px, py))
+            
+            return Polygon(sector_points)
 
         def sector_area(a1: float, a2: float) -> float:
             # compute intersection area between a sector and the mission area
@@ -543,10 +562,35 @@ class MissionPlanner:
             if clipped.is_empty:
                 continue
 
+            # only create a task when the clipped result has area
+            # note: intersections can return non-polygons or collections depending on boundary interactions
+            poly = None
+
+            if clipped.geom_type == "Polygon":
+                poly = clipped
+
+            elif clipped.geom_type == "MultiPolygon":
+                # choose the largest polygon so we always store a single region per task
+                poly = max(clipped.geoms, key=lambda g: g.area, default=None)
+
+            elif clipped.geom_type == "GeometryCollection":
+                # extract only polygon components from the collection and choose the largest
+                polys = [g for g in clipped.geoms if g.geom_type == "Polygon"]
+                if len(polys) > 0:
+                    poly = max(polys, key=lambda g: g.area)
+
+            # ignore anything that still isn't a usable polygon
+            if poly is None:
+                continue
+
+            # ignore tiny slivers that won’t be useful for search coverage
+            if poly.area < 1e-6:
+                continue
+
             task = MissionTask(
                 id=self._next_task_id("search"),
                 type=TaskType.SEARCH_AREA,
-                area=list(clipped.exterior.coords),
+                area=list(poly.exterior.coords),
                 status=TaskStatus.UNASSIGNED,
                 priority=10,
                 constraints={
@@ -556,6 +600,12 @@ class MissionPlanner:
             )
 
             self.state.tasks[task.id] = task
+        # fail fast if we couldn't generate any usable search regions
+        # note: silent 0-task missions make everything downstream confusing
+        created = [t for t in self.state.tasks.values() if t.type == TaskType.SEARCH_AREA]
+        if len(created) == 0:
+            raise RuntimeError("create_search_tasks produced 0 valid search polygons")
+
 
     def assign_initial_search_tasks(self) -> None:
         # assign one search task to each drone that is execution-available and planner-unassigned
