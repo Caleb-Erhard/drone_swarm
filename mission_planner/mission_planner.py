@@ -45,9 +45,23 @@ class MissionPlanner:
         # task_seq is used to generate unique ids when we later add more task types
         self._task_seq = 0
 
+        # pending_assignments stores planner decisions without requiring sim wiring
+        # key: drone_id, value: task_id
+        self._pending_assignments: Dict[str, str] = {}
+
         # precompute valid coverage cells inside the polygon for fast coverage checks
         self._build_valid_cells()
 
+    def pop_pending_assignments(self) -> Dict[str, str]:
+        # return and clear planner-generated assignments since last call
+        # note: this supports both a future push model and a future pull model
+        out = dict(self._pending_assignments)
+        self._pending_assignments.clear()
+        return out
+
+    def _record_assignment(self, drone_id: str, task_id: str) -> None:
+        # record a task assignment as a pending "downlink" event
+        self._pending_assignments[drone_id] = task_id
 
     def register_drones(self, drones: List[DroneState]) -> None:
         # register drones in the mission state
@@ -58,18 +72,15 @@ class MissionPlanner:
         if self.home_xy is None and len(drones) > 0:
             self.home_xy = drones[0].position
 
-
     def start_mission(self) -> None:
         # create initial search tasks and assign them one-per-drone
         self.create_search_tasks()
         self.assign_initial_search_tasks()
 
-
     def _next_task_id(self, prefix: str) -> str:
         # generate unique task ids to avoid collisions across replans
         self._task_seq += 1
         return f"{prefix}_{self._task_seq}"
-
 
     def _build_valid_cells(self) -> None:
         # compute which grid cells are inside the mission polygon
@@ -96,12 +107,10 @@ class MissionPlanner:
 
         self.state.valid_cells = valid
 
-
     def _cell_index_from_xy(self, xy: Tuple[float, float]) -> Tuple[int, int]:
         # convert an (x, y) position into a grid cell index
         x, y = xy
         return (int(x / self.grid_size), int(y / self.grid_size))
-
 
     def ingest_drone_update(
         self,
@@ -111,6 +120,7 @@ class MissionPlanner:
         is_available: Optional[bool] = None,
     ) -> None:
         # update a drone's state using a status message from the sim/execution layer
+        # note: the execution layer owns is_available and reports it here
         if drone_id not in self.state.drones:
             raise ValueError(f"Unknown drone id: {drone_id}")
 
@@ -128,7 +138,6 @@ class MissionPlanner:
         # update global coverage heatmap based on where the drone is now
         self._update_coverage_with_position(position_xy)
 
-
     def _update_coverage_with_position(self, position_xy: Tuple[float, float]) -> None:
         # increment visit count for the grid cell that contains the position
         cell = self._cell_index_from_xy(position_xy)
@@ -139,7 +148,6 @@ class MissionPlanner:
 
         # stacking revisits is implemented by storing visit counts per cell
         self.state.visit_counts[cell] = self.state.visit_counts.get(cell, 0) + 1
-
 
     def report_target_detection(
         self,
@@ -167,6 +175,52 @@ class MissionPlanner:
         if not target.is_being_tracked:
             self._assign_tracking_task_to_reporting_drone(reporting_drone_id, target_id)
 
+    def report_track_failed(
+        self,
+        reporting_drone_id: str,
+        target_id: str,
+        last_known_position_xy: Tuple[float, float],
+        reason: str = "lost",
+    ) -> None:
+        # handle a drone telling the planner that tracking is no longer successful
+        # note: reacquire behavior is execution-owned; the planner only responds to success/failure
+        if reporting_drone_id not in self.state.drones:
+            raise ValueError(f"Unknown drone id: {reporting_drone_id}")
+
+        drone = self.state.drones[reporting_drone_id]
+
+        # if target is unknown, just release the drone back to search
+        if target_id not in self.state.targets:
+            drone.is_tracking = False
+            drone.current_task_id = None
+            self._assign_nearest_unassigned_search_task(drone_id=reporting_drone_id)
+            return
+
+        target = self.state.targets[target_id]
+
+        # update last known and clear assignment
+        target.position = last_known_position_xy
+        target.assigned_drone_id = None
+        target.is_being_tracked = False
+
+        # clear tracking state on the drone
+        drone.is_tracking = False
+
+        # if the drone had a tracking task, mark it failed
+        if drone.current_task_id is not None and drone.current_task_id in self.state.tasks:
+            task = self.state.tasks[drone.current_task_id]
+            if task.type == TaskType.TRACK_TARGET and task.target_id == target_id:
+                task.status = TaskStatus.FAILED
+                task.assigned_drone = None
+
+        # clear planner-level assignment pointer
+        drone.current_task_id = None
+
+        # assign the drone back to search if possible
+        self._assign_nearest_unassigned_search_task(drone_id=reporting_drone_id)
+
+        # note: do not modify drone.is_available here
+        # note: availability is execution-owned and comes from ingest_drone_update
 
     def tick(self) -> None:
         # advance planner time and run simple rule checks
@@ -178,7 +232,6 @@ class MissionPlanner:
             if drone.battery <= 5.0 and drone.current_task_id is not None:
                 # if battery is critically low, force return-to-base
                 self._assign_return_to_base(drone.id)
-
 
     def _assign_tracking_task_to_reporting_drone(self, drone_id: str, target_id: str) -> None:
         # transition a drone into tracking mode and perform search-task handoff if needed
@@ -208,19 +261,23 @@ class MissionPlanner:
         # store task in mission state
         self.state.tasks[task.id] = task
 
-        # update drone bookkeeping
+        # update planner-owned drone bookkeeping
         drone.current_task_id = task.id
         drone.is_tracking = True
-        drone.is_available = False
 
         # update target bookkeeping
         target = self.state.targets[target_id]
         target.assigned_drone_id = drone_id
         target.is_being_tracked = True
 
+        # record assignment event for later adapters/tests
+        self._record_assignment(drone_id, task.id)
+
+        # note: do not modify drone.is_available here
+        # note: availability is execution-owned and comes from ingest_drone_update
 
     def _handoff_search_task(self, from_drone_id: str) -> None:
-        # if the drone currently owns a search task, reassign that search task to the nearest available drone
+        # if the drone currently owns a search task, reassign that search task to the nearest free drone
         from_drone = self.state.drones[from_drone_id]
         from_task_id = from_drone.current_task_id
 
@@ -241,10 +298,10 @@ class MissionPlanner:
         from_task.assigned_drone = None
         from_task.status = TaskStatus.UNASSIGNED
 
-        # clear the drone's current task pointer (it will get a tracking task next)
+        # clear planner-level assignment pointer (it will get a tracking task next)
         from_drone.current_task_id = None
 
-        # find a replacement drone that is available and not tracking
+        # find a replacement drone that is execution-available and planner-unassigned
         replacement_id = self._find_nearest_available_drone_id(
             origin_xy=from_drone.position,
             exclude_drone_id=from_drone_id,
@@ -254,15 +311,20 @@ class MissionPlanner:
             # if nobody can take it right now, the task stays unassigned
             return
 
-        # assign the task to the replacement drone
         replacement_drone = self.state.drones[replacement_id]
+
+        # assign the task to the replacement drone
         from_task.assigned_drone = replacement_id
         from_task.status = TaskStatus.ASSIGNED
 
         replacement_drone.current_task_id = from_task.id
-        replacement_drone.is_available = False
         replacement_drone.is_tracking = False
 
+        # record assignment event for later adapters/tests
+        self._record_assignment(replacement_id, from_task.id)
+
+        # note: do not modify replacement_drone.is_available here
+        # note: availability is execution-owned and comes from ingest_drone_update
 
     def _find_nearest_available_drone_id(
         self,
@@ -280,9 +342,15 @@ class MissionPlanner:
             if exclude_drone_id is not None and drone.id == exclude_drone_id:
                 continue
 
-            # require the drone to be idle/available and not tracking
+            # require execution-owned availability
             if not drone.is_available:
                 continue
+
+            # require planner-level "no task currently assigned"
+            if drone.current_task_id is not None:
+                continue
+
+            # never take a drone already tracking
             if drone.is_tracking:
                 continue
 
@@ -296,6 +364,53 @@ class MissionPlanner:
 
         return best_id
 
+    def _assign_nearest_unassigned_search_task(self, drone_id: str) -> None:
+        # assign the nearest unassigned search task to the given drone
+        drone = self.state.drones[drone_id]
+
+        # require execution-owned availability
+        if not drone.is_available:
+            return
+
+        # require planner-level "no task currently assigned"
+        if drone.current_task_id is not None:
+            return
+
+        best_task: Optional[MissionTask] = None
+        best_dist: float = float("inf")
+
+        for task in self.state.tasks.values():
+            if task.type != TaskType.SEARCH_AREA:
+                continue
+            if task.status != TaskStatus.UNASSIGNED:
+                continue
+            if not task.area:
+                continue
+
+            # compute distance from drone to polygon centroid as a simple heuristic
+            poly = Polygon(task.area)
+            c = poly.centroid
+            dx = drone.position[0] - c.x
+            dy = drone.position[1] - c.y
+            dist = (dx * dx + dy * dy) ** 0.5
+
+            if dist < best_dist:
+                best_dist = dist
+                best_task = task
+
+        if best_task is None:
+            return
+
+        best_task.assigned_drone = drone.id
+        best_task.status = TaskStatus.ASSIGNED
+        drone.current_task_id = best_task.id
+        drone.is_tracking = False
+
+        # record assignment event for later adapters/tests
+        self._record_assignment(drone.id, best_task.id)
+
+        # note: do not modify drone.is_available here
+        # note: availability is execution-owned and comes from ingest_drone_update
 
     def _assign_return_to_base(self, drone_id: str) -> None:
         # create a return-to-base task and assign it to the drone
@@ -324,9 +439,13 @@ class MissionPlanner:
 
         self.state.tasks[task.id] = task
         drone.current_task_id = task.id
-        drone.is_available = False
         drone.is_tracking = False
 
+        # record assignment event for later adapters/tests
+        self._record_assignment(drone_id, task.id)
+
+        # note: do not modify drone.is_available here during normal operation
+        # note: if you want emergency overrides to lock the drone, you can set is_available false here
 
     def coverage_fraction(self) -> float:
         # compute fraction of mission cells visited at least once
@@ -340,7 +459,6 @@ class MissionPlanner:
                 visited += 1
 
         return visited / total
-
 
     def create_search_tasks(self) -> None:
         """
@@ -439,9 +557,8 @@ class MissionPlanner:
 
             self.state.tasks[task.id] = task
 
-
     def assign_initial_search_tasks(self) -> None:
-        # assign one search task to each drone that is available
+        # assign one search task to each drone that is execution-available and planner-unassigned
         unassigned_tasks: List[MissionTask] = []
         for task in self.state.tasks.values():
             if task.type == TaskType.SEARCH_AREA and task.status == TaskStatus.UNASSIGNED:
@@ -455,18 +572,27 @@ class MissionPlanner:
         # sort tasks to keep deterministic assignment (useful for tests)
         unassigned_tasks.sort(key=lambda t: t.id)
 
-        for i, drone in enumerate(drone_list):
-            if i >= len(unassigned_tasks):
+        for drone in drone_list:
+            if len(unassigned_tasks) == 0:
                 break
 
-            # skip drones that aren't available to take a task
+            # require execution-owned availability
             if not drone.is_available:
                 continue
 
-            task = unassigned_tasks[i]
+            # require planner-level unassigned state
+            if drone.current_task_id is not None:
+                continue
+
+            task = unassigned_tasks.pop(0)
             task.assigned_drone = drone.id
             task.status = TaskStatus.ASSIGNED
 
             drone.current_task_id = task.id
-            drone.is_available = False
             drone.is_tracking = False
+
+            # record assignment event for later adapters/tests
+            self._record_assignment(drone.id, task.id)
+
+            # note: do not modify drone.is_available here
+            # note: availability is execution-owned and comes from ingest_drone_update
