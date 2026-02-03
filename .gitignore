@@ -29,3 +29,5 @@ sysinfo.txt
 # ML-Agents / training output
 results/
 *.onnx
+
+.vscode/
