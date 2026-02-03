@@ -30,4 +30,7 @@ sysinfo.txt
 results/
 *.onnx
 
+# Unity simulation project (local environment)
+unity_simulation/
+
 .vscode/
