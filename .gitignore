@@ -29,3 +29,14 @@ sysinfo.txt
 # ML-Agents / training output
 results/
 *.onnx
+
+.venv-mlagents/
+handoff_packet_*/
+
+# Unity local recovery/backup scenes
+Assets/_Recovery/
+Assets/_Recovery.meta
+Assets/Scenes/*_before_restore_*.unity
+Assets/Scenes/*_before_restore_*.unity.meta
+Assets/Scenes/*_recovered_from_backup*.unity
+Assets/Scenes/*_recovered_from_backup*.unity.meta
