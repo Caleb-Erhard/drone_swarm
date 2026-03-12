@@ -12,10 +12,17 @@ public class LockedAltitudeDroneController : MonoBehaviour
     public float acceleration = 5f;          // How quickly drone reaches max speed
     public float turnSpeed = 100f;           // Rotation speed
     public float tiltAmount = 20f;           // Visual tilt when moving
+    public float yawControlResponse = 12f;   // How quickly yaw rate tracks turn command
     
     [Header("Physics Settings")]
     public float drag = 2f;
     public float angularDrag = 3f;
+    public bool lockPitchAndRoll = true;
+
+    [Header("Visual Tilt")]
+    public bool applyVisualTilt = false;
+    public Transform visualTiltTransform;
+    public float tiltSmoothness = 6f;
     
     private Rigidbody rb;
     private float currentGroundHeight = 0f;
@@ -24,6 +31,11 @@ public class LockedAltitudeDroneController : MonoBehaviour
     // For ML-Agents: these will be set by the agent
     [HideInInspector] public Vector2 movementInput = Vector2.zero;  // x = strafe, y = forward
     [HideInInspector] public float turnInput = 0f;                   // -1 to 1 for rotation
+
+    [Header("Control Source")]
+    public bool manualInputEnabled = true;
+
+    public float MaxSpeed => maxSpeed;
     
     void Start()
     {
@@ -31,14 +43,25 @@ public class LockedAltitudeDroneController : MonoBehaviour
         rb.linearDamping = drag;
         rb.angularDamping = angularDrag;
         rb.useGravity = true;
+        rb.interpolation = RigidbodyInterpolation.Interpolate;
+
+        if (lockPitchAndRoll)
+        {
+            rb.constraints |= RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+        }
     }
 
     void Update()
     {
-        // Manual keyboard control for testing (will be replaced by ML-Agent)
-        movementInput.y = Input.GetAxis("Vertical");    // W/S
-        movementInput.x = Input.GetAxis("Horizontal");  // A/D
-        
+        if (!manualInputEnabled)
+        {
+            return;
+        }
+
+        // Manual keyboard control for testing (can be disabled for ML-Agent control)
+        movementInput.y = Input.GetAxisRaw("Vertical");    // W/S
+        movementInput.x = Input.GetAxisRaw("Horizontal");  // A/D
+
         turnInput = 0f;
         if (Input.GetKey(KeyCode.Q)) turnInput = -1f;
         if (Input.GetKey(KeyCode.E)) turnInput = 1f;
@@ -106,29 +129,56 @@ public class LockedAltitudeDroneController : MonoBehaviour
         
         Vector3 desiredVelocity = forwardFlat * movementInput.y * maxSpeed;
         desiredVelocity += rightFlat * movementInput.x * maxSpeed;
+
+        // Rigidbody linear damping is applied after FixedUpdate.
+        // Pre-compensate desired horizontal velocity so post-physics speed still tracks maxSpeed.
+        float dampingCompensation = 1f + (Mathf.Max(0f, rb.linearDamping) * Time.fixedDeltaTime);
+        Vector3 compensatedDesiredVelocity = desiredVelocity * dampingCompensation;
         
-        // Get current horizontal velocity
         Vector3 currentVelocity = rb.linearVelocity;
-        currentVelocity.y = 0; // Ignore vertical component
-        
-        // Calculate force needed to reach desired velocity
-        Vector3 velocityDifference = desiredVelocity - currentVelocity;
-        Vector3 accelerationForce = velocityDifference * acceleration;
-        
-        rb.AddForce(accelerationForce, ForceMode.Acceleration);
+        Vector3 currentHorizontalVelocity = new Vector3(currentVelocity.x, 0f, currentVelocity.z);
+        Vector3 nextHorizontalVelocity = Vector3.MoveTowards(
+            currentHorizontalVelocity,
+            compensatedDesiredVelocity,
+            Mathf.Max(0.1f, acceleration) * Time.fixedDeltaTime);
+
+        rb.linearVelocity = new Vector3(nextHorizontalVelocity.x, currentVelocity.y, nextHorizontalVelocity.z);
     }
 
     void ApplyRotation()
     {
-        rb.AddTorque(transform.up * turnInput * turnSpeed * Time.fixedDeltaTime);
+        float targetYawRate = turnInput * turnSpeed * Mathf.Deg2Rad;
+        float nextYawRate = Mathf.MoveTowards(
+            rb.angularVelocity.y,
+            targetYawRate,
+            Mathf.Max(0.1f, yawControlResponse) * Time.fixedDeltaTime);
+
+        rb.angularVelocity = new Vector3(0f, nextYawRate, 0f);
     }
 
     void ApplyTilt()
     {
+        if (!applyVisualTilt || visualTiltTransform == null)
+        {
+            return;
+        }
+
         // Visual tilt based on movement
         Vector3 targetTilt = new Vector3(movementInput.y * tiltAmount, 0f, -movementInput.x * tiltAmount);
-        currentTilt = Vector3.Lerp(currentTilt, targetTilt, Time.deltaTime * 3f);
-        transform.localRotation = Quaternion.Euler(currentTilt.x, transform.localEulerAngles.y, currentTilt.z);
+        currentTilt = Vector3.Lerp(currentTilt, targetTilt, Time.fixedDeltaTime * Mathf.Max(0.1f, tiltSmoothness));
+        visualTiltTransform.localRotation = Quaternion.Euler(currentTilt.x, 0f, currentTilt.z);
+    }
+
+    public void SetControlInputs(float strafe, float forward, float turn)
+    {
+        movementInput = Vector2.ClampMagnitude(new Vector2(strafe, forward), 1f);
+        turnInput = Mathf.Clamp(turn, -1f, 1f);
+    }
+
+    public void ClearControlInputs()
+    {
+        movementInput = Vector2.zero;
+        turnInput = 0f;
     }
 
     // Debug visualization
@@ -148,7 +198,7 @@ public class LockedAltitudeDroneController : MonoBehaviour
         float currentAltitude = transform.position.y - currentGroundHeight;
         GUI.Label(new Rect(10, 10, 400, 20), $"Altitude: {currentAltitude:F1}m / Target: {targetAltitude}m");
         GUI.Label(new Rect(10, 30, 400, 20), $"Speed: {new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z).magnitude:F1} m/s / Max: {maxSpeed} m/s");
-        GUI.Label(new Rect(10, 50, 400, 20), "Controls: WASD=Move, Q/E=Turn");
+        GUI.Label(new Rect(10, 50, 400, 20), manualInputEnabled ? "Controls: WASD=Move, Q/E=Turn" : "Controls: ML-Agent");
         GUI.Label(new Rect(10, 70, 400, 20), $"Ground Height: {currentGroundHeight:F1}m");
     }
 }

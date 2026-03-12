@@ -30,4 +30,22 @@ sysinfo.txt
 results/
 *.onnx
 
+.venv-mlagents/
+handoff_packet_*/
+
+# Unity local recovery/backup scenes
+Assets/_Recovery/
+Assets/_Recovery.meta
+Assets/Scenes/*_before_restore_*.unity
+Assets/Scenes/*_before_restore_*.unity.meta
+Assets/Scenes/*_recovered_from_backup*.unity
+Assets/Scenes/*_recovered_from_backup*.unity.meta
 .vscode/
+
+# Unity local recovery/backup scenes (project moved under unity_simulation/)
+unity_simulation/Assets/_Recovery/
+unity_simulation/Assets/_Recovery.meta
+unity_simulation/Assets/Scenes/*_before_restore_*.unity
+unity_simulation/Assets/Scenes/*_before_restore_*.unity.meta
+unity_simulation/Assets/Scenes/*_recovered_from_backup*.unity
+unity_simulation/Assets/Scenes/*_recovered_from_backup*.unity.meta
