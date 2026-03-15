@@ -23,6 +23,17 @@ public class AreaCoverageTracker : MonoBehaviour
             FootprintCellCount > 0 ? (float)PreviouslyCoveredCellCount / FootprintCellCount : 0f;
     }
 
+    public struct WorkloadSplit
+    {
+        public Vector2 FirstCenterXZ;
+        public Vector2 FirstSizeXZ;
+        public Vector2 SecondCenterXZ;
+        public Vector2 SecondSizeXZ;
+        public int FirstUnvisitedCellCount;
+        public int SecondUnvisitedCellCount;
+        public bool SplitAlongX;
+    }
+
     [Header("Search Zone")]
     [SerializeField] private BoxCollider searchZone;
     [SerializeField, Min(0.25f)] private float cellSize = 1f;
@@ -69,6 +80,7 @@ public class AreaCoverageTracker : MonoBehaviour
     public float SensorRadius => Mathf.Max(0.1f, currentCoverageRadius > 0f ? currentCoverageRadius : sensorRadius);
     public int TotalCells => totalCells;
     public int VisitedCells => visitedCount;
+    public int UnvisitedCells => Mathf.Max(0, totalCells - visitedCount);
 
     private void Awake()
     {
@@ -308,6 +320,16 @@ public class AreaCoverageTracker : MonoBehaviour
         return new Vector4(toMinX, toMaxX, toMinZ, toMaxZ);
     }
 
+    public Vector3[] GetSensorFootprintCorners()
+    {
+        if (coverageShape != CoverageShape.CameraGroundFootprint)
+        {
+            return null;
+        }
+
+        return TryUpdateCameraGroundFootprint() ? cameraGroundFootprintCorners : null;
+    }
+
     public void SetSensorTransform(Transform sensor)
     {
         sensorTransform = sensor;
@@ -436,6 +458,225 @@ public class AreaCoverageTracker : MonoBehaviour
         float zoneDiagonal = Mathf.Sqrt((zoneBounds.size.x * zoneBounds.size.x) + (zoneBounds.size.z * zoneBounds.size.z));
         normalizedDistance = zoneDiagonal > 0.001f ? Mathf.Clamp01(distance / zoneDiagonal) : 0f;
         return true;
+    }
+
+    public bool TryGetWorkloadBalancedSplit(out WorkloadSplit split, bool preferLongAxis = true)
+    {
+        split = default;
+        if (totalCells < 2 || visitedCells.Length != totalCells)
+        {
+            return false;
+        }
+
+        bool canSplitX = gridWidth >= 2;
+        bool canSplitZ = gridHeight >= 2;
+        if (!canSplitX && !canSplitZ)
+        {
+            return false;
+        }
+
+        int[] unvisitedPerColumn = canSplitX ? new int[gridWidth] : Array.Empty<int>();
+        int[] unvisitedPerRow = canSplitZ ? new int[gridHeight] : Array.Empty<int>();
+        for (int z = 0; z < gridHeight; z++)
+        {
+            for (int x = 0; x < gridWidth; x++)
+            {
+                if (visitedCells[GridToIndex(x, z)])
+                {
+                    continue;
+                }
+
+                if (canSplitX)
+                {
+                    unvisitedPerColumn[x]++;
+                }
+
+                if (canSplitZ)
+                {
+                    unvisitedPerRow[z]++;
+                }
+            }
+        }
+
+        int totalUnvisited = UnvisitedCells;
+        SplitCandidate splitX = canSplitX
+            ? BuildBestSplitCandidate(unvisitedPerColumn, totalUnvisited, true)
+            : SplitCandidate.Invalid;
+        SplitCandidate splitZ = canSplitZ
+            ? BuildBestSplitCandidate(unvisitedPerRow, totalUnvisited, false)
+            : SplitCandidate.Invalid;
+
+        SplitCandidate bestSplit = ChooseBetterSplit(splitX, splitZ, preferLongAxis);
+        if (!bestSplit.IsValid)
+        {
+            return false;
+        }
+
+        if (bestSplit.SplitAlongX)
+        {
+            float firstWidth = zoneBounds.size.x * ((bestSplit.FirstSliceCount) / (float)gridWidth);
+            float secondWidth = zoneBounds.size.x - firstWidth;
+            if (firstWidth <= 0f || secondWidth <= 0f)
+            {
+                return false;
+            }
+
+            split = new WorkloadSplit
+            {
+                FirstCenterXZ = new Vector2(zoneBounds.min.x + (firstWidth * 0.5f), zoneBounds.center.z),
+                FirstSizeXZ = new Vector2(firstWidth, zoneBounds.size.z),
+                SecondCenterXZ = new Vector2(zoneBounds.min.x + firstWidth + (secondWidth * 0.5f), zoneBounds.center.z),
+                SecondSizeXZ = new Vector2(secondWidth, zoneBounds.size.z),
+                FirstUnvisitedCellCount = bestSplit.FirstUnvisitedCells,
+                SecondUnvisitedCellCount = bestSplit.SecondUnvisitedCells,
+                SplitAlongX = true
+            };
+            return true;
+        }
+
+        float firstDepth = zoneBounds.size.z * ((bestSplit.FirstSliceCount) / (float)gridHeight);
+        float secondDepth = zoneBounds.size.z - firstDepth;
+        if (firstDepth <= 0f || secondDepth <= 0f)
+        {
+            return false;
+        }
+
+        split = new WorkloadSplit
+        {
+            FirstCenterXZ = new Vector2(zoneBounds.center.x, zoneBounds.min.z + (firstDepth * 0.5f)),
+            FirstSizeXZ = new Vector2(zoneBounds.size.x, firstDepth),
+            SecondCenterXZ = new Vector2(zoneBounds.center.x, zoneBounds.min.z + firstDepth + (secondDepth * 0.5f)),
+            SecondSizeXZ = new Vector2(zoneBounds.size.x, secondDepth),
+            FirstUnvisitedCellCount = bestSplit.FirstUnvisitedCells,
+            SecondUnvisitedCellCount = bestSplit.SecondUnvisitedCells,
+            SplitAlongX = false
+        };
+        return true;
+    }
+
+    private readonly struct SplitCandidate
+    {
+        public static SplitCandidate Invalid => default;
+
+        public readonly bool IsValid;
+        public readonly bool SplitAlongX;
+        public readonly int FirstSliceCount;
+        public readonly int FirstUnvisitedCells;
+        public readonly int SecondUnvisitedCells;
+        public readonly int UnvisitedDelta;
+        public readonly int SliceDelta;
+
+        public SplitCandidate(
+            bool splitAlongX,
+            int firstSliceCount,
+            int firstUnvisitedCells,
+            int secondUnvisitedCells,
+            int unvisitedDelta,
+            int sliceDelta)
+        {
+            IsValid = true;
+            SplitAlongX = splitAlongX;
+            FirstSliceCount = firstSliceCount;
+            FirstUnvisitedCells = firstUnvisitedCells;
+            SecondUnvisitedCells = secondUnvisitedCells;
+            UnvisitedDelta = unvisitedDelta;
+            SliceDelta = sliceDelta;
+        }
+    }
+
+    private static SplitCandidate BuildBestSplitCandidate(int[] unvisitedPerSlice, int totalUnvisited, bool splitAlongX)
+    {
+        if (unvisitedPerSlice == null || unvisitedPerSlice.Length < 2)
+        {
+            return SplitCandidate.Invalid;
+        }
+
+        int running = 0;
+        int bestFirstSliceCount = 1;
+        int bestFirstUnvisited = 0;
+        int bestSecondUnvisited = totalUnvisited;
+        int bestUnvisitedDelta = int.MaxValue;
+        int bestSliceDelta = int.MaxValue;
+
+        for (int i = 0; i < unvisitedPerSlice.Length - 1; i++)
+        {
+            running += unvisitedPerSlice[i];
+            int firstUnvisited = running;
+            int secondUnvisited = totalUnvisited - firstUnvisited;
+            int unvisitedDelta = Mathf.Abs(firstUnvisited - secondUnvisited);
+
+            int firstSliceCount = i + 1;
+            int secondSliceCount = unvisitedPerSlice.Length - firstSliceCount;
+            int sliceDelta = Mathf.Abs(firstSliceCount - secondSliceCount);
+
+            bool betterDelta = unvisitedDelta < bestUnvisitedDelta;
+            bool tieWithBetterGeometry = unvisitedDelta == bestUnvisitedDelta && sliceDelta < bestSliceDelta;
+            if (!betterDelta && !tieWithBetterGeometry)
+            {
+                continue;
+            }
+
+            bestFirstSliceCount = firstSliceCount;
+            bestFirstUnvisited = firstUnvisited;
+            bestSecondUnvisited = secondUnvisited;
+            bestUnvisitedDelta = unvisitedDelta;
+            bestSliceDelta = sliceDelta;
+        }
+
+        return new SplitCandidate(
+            splitAlongX,
+            bestFirstSliceCount,
+            bestFirstUnvisited,
+            bestSecondUnvisited,
+            bestUnvisitedDelta,
+            bestSliceDelta);
+    }
+
+    private SplitCandidate ChooseBetterSplit(SplitCandidate splitX, SplitCandidate splitZ, bool preferLongAxis)
+    {
+        if (!splitX.IsValid)
+        {
+            return splitZ;
+        }
+
+        if (!splitZ.IsValid)
+        {
+            return splitX;
+        }
+
+        if (splitX.UnvisitedDelta < splitZ.UnvisitedDelta)
+        {
+            return splitX;
+        }
+
+        if (splitZ.UnvisitedDelta < splitX.UnvisitedDelta)
+        {
+            return splitZ;
+        }
+
+        float axisDiff = zoneBounds.size.x - zoneBounds.size.z;
+        if (Mathf.Abs(axisDiff) > 0.001f)
+        {
+            bool xIsLongAxis = axisDiff > 0f;
+            if (preferLongAxis)
+            {
+                return xIsLongAxis ? splitX : splitZ;
+            }
+
+            return xIsLongAxis ? splitZ : splitX;
+        }
+
+        if (splitX.SliceDelta < splitZ.SliceDelta)
+        {
+            return splitX;
+        }
+
+        if (splitZ.SliceDelta < splitX.SliceDelta)
+        {
+            return splitZ;
+        }
+
+        return splitX;
     }
 
     private bool TryUpdateCameraGroundFootprint()

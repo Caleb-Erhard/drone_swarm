@@ -8,18 +8,20 @@ using UnityEngine;
 public class DroneCoverageAgent : Agent
 {
     private const int LocalCoverageSamplesPerAxis = 5;
-    private const int ExpectedVectorObservationSize = 41;
+    private const int ExpectedVectorObservationSize = 57;
 
     [Header("References")]
     [SerializeField] private LockedAltitudeDroneController droneController;
     [SerializeField] private AreaCoverageTracker coverageTracker;
 
     [Header("Episode Settings")]
-    [SerializeField] private float requiredCoverage = 0.85f;
+    [SerializeField] private float requiredCoverage = 1f;
     [SerializeField] private float maxDistanceOutsideZone = 3f;
     [SerializeField] private float spawnAltitudeOffset = 0f;
     [SerializeField, Min(200)] private int episodeStepLimit = 4000;
     [SerializeField] private bool logEpisodeEndReason = true;
+    [SerializeField] private bool useFixedZoneSize = true;
+    [SerializeField] private Vector2 fixedZoneSize = new Vector2(250f, 200f);
     [SerializeField] private bool randomizeZoneSizeEachEpisode = true;
     [SerializeField] private Vector2 zoneWidthRange = new Vector2(50f, 130f);
     [SerializeField] private Vector2 zoneDepthRange = new Vector2(50f, 130f);
@@ -53,17 +55,18 @@ public class DroneCoverageAgent : Agent
     [SerializeField] private float outsideZonePenalty = 0.01f;
     [SerializeField] private float collisionPenalty = 0.75f;
     [SerializeField] private float completionReward = 3f;
+    [SerializeField] private float completionEfficiencyBonus = 10f;
     [SerializeField] private float timeoutPenalty = 0.5f;
     [SerializeField] private float revisitingPenalty = 0f;
     [SerializeField] private float overlapPenalty = 0.0012f;
     [SerializeField] private float turnInputPenalty = 0f;
-    [SerializeField] private float yawRatePenalty = 0f;
+    [SerializeField] private float yawRatePenalty = 0.0005f;
     [SerializeField] private float overlapTurnPenalty = 0f;
-    [SerializeField] private float diagonalMotionPenalty = 0f;
+    [SerializeField] private float diagonalMotionPenalty = 0.001f;
     [SerializeField] private float frontierAlignmentRewardScale = 0f;
     [SerializeField] private float frontierDistanceRewardScale = 0f;
     [SerializeField, Min(0.1f)] private float targetExplorationSpeed = 8f;
-    [SerializeField] private float explorationSpeedReward = 0.002f;
+    [SerializeField] private float explorationSpeedReward = 0.1f;
     [SerializeField] private float lowSpeedOverlapPenalty = 0f;
     [SerializeField, Range(0f, 1f)] private float actionSmoothing = 1f;
     [SerializeField, Range(0f, 0.5f)] private float actionDeadzone = 0.08f;
@@ -100,11 +103,13 @@ public class DroneCoverageAgent : Agent
 
     private void OnValidate()
     {
+        requiredCoverage = Mathf.Clamp01(requiredCoverage);
         maxExpectedZoneDimension = Mathf.Max(10f, maxExpectedZoneDimension);
         localCoverageSampleSpacing = Mathf.Max(0.1f, localCoverageSampleSpacing);
         episodeStepLimit = Mathf.Max(200, episodeStepLimit);
         edgeSpawnInset = Mathf.Max(0f, edgeSpawnInset);
         edgeSpawnOutsideOffset = Mathf.Max(0f, edgeSpawnOutsideOffset);
+        completionEfficiencyBonus = Mathf.Max(0f, completionEfficiencyBonus);
         overlapPenalty = Mathf.Max(0f, overlapPenalty);
         turnInputPenalty = Mathf.Max(0f, turnInputPenalty);
         yawRatePenalty = Mathf.Max(0f, yawRatePenalty);
@@ -124,6 +129,8 @@ public class DroneCoverageAgent : Agent
         heuristicTurnScale = Mathf.Clamp(heuristicTurnScale, 0.1f, 1f);
         heuristicPrecisionScale = Mathf.Clamp(heuristicPrecisionScale, 0.1f, 1f);
 
+        fixedZoneSize.x = Mathf.Max(2f, fixedZoneSize.x);
+        fixedZoneSize.y = Mathf.Max(2f, fixedZoneSize.y);
         zoneWidthRange.x = Mathf.Max(2f, zoneWidthRange.x);
         zoneWidthRange.y = Mathf.Max(zoneWidthRange.x, zoneWidthRange.y);
         zoneDepthRange.x = Mathf.Max(2f, zoneDepthRange.x);
@@ -163,8 +170,17 @@ public class DroneCoverageAgent : Agent
         }
 
         environmentParameters = Academy.Instance.EnvironmentParameters;
-        activeZoneWidthRange = zoneWidthRange;
-        activeZoneDepthRange = zoneDepthRange;
+        if (useFixedZoneSize)
+        {
+            activeZoneWidthRange = new Vector2(fixedZoneSize.x, fixedZoneSize.x);
+            activeZoneDepthRange = new Vector2(fixedZoneSize.y, fixedZoneSize.y);
+        }
+        else
+        {
+            activeZoneWidthRange = zoneWidthRange;
+            activeZoneDepthRange = zoneDepthRange;
+        }
+
         currentCurriculumProgress01 = 1f;
 
         // Prevent infinite episodes when scene MaxStep is left at 0.
@@ -192,10 +208,14 @@ public class DroneCoverageAgent : Agent
 
         UpdateEpisodeCurriculum();
         coverageTracker.SetSensorTransform(transform);
-        if (randomizeZoneSizeEachEpisode)
+        Bounds currentZone = coverageTracker.ZoneBounds;
+        Vector2 centerXZ = new Vector2(currentZone.center.x, currentZone.center.z);
+        if (useFixedZoneSize)
         {
-            Bounds currentZone = coverageTracker.ZoneBounds;
-            Vector2 centerXZ = new Vector2(currentZone.center.x, currentZone.center.z);
+            coverageTracker.ConfigureSearchZone(centerXZ, fixedZoneSize);
+        }
+        else if (randomizeZoneSizeEachEpisode)
+        {
             float zoneWidth = Random.Range(activeZoneWidthRange.x, activeZoneWidthRange.y);
             float zoneDepth = Random.Range(activeZoneDepthRange.x, activeZoneDepthRange.y);
             coverageTracker.ConfigureSearchZone(centerXZ, new Vector2(zoneWidth, zoneDepth));
@@ -249,6 +269,7 @@ public class DroneCoverageAgent : Agent
         sensor.AddObservation(boundsDistances.z);
         sensor.AddObservation(boundsDistances.w);
 
+        AddSensorFootprintCornerObservations(sensor);
         AddLocalCoverageObservations(sensor);
     }
 
@@ -301,14 +322,7 @@ public class DroneCoverageAgent : Agent
 
             float horizontalSpeed = new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z).magnitude;
             float speed01 = Mathf.Clamp01(horizontalSpeed / Mathf.Max(0.1f, droneController.MaxSpeed));
-            AddReward(speed01 * explorationSpeedReward);
-
-            Vector4 bounds = coverageTracker.GetNormalizedDistancesToBounds(transform.position);
-            float minBoundsDist = Mathf.Min(bounds.x, bounds.y, bounds.z, bounds.w);
-            if (minBoundsDist < 0.1f)
-            {
-                AddReward(Mathf.Abs(turn) * 0.001f);
-            }
+            AddReward(speed01 * 0.005f);
 
             // Discourage diagonal traversals so policy prefers row/column sweep lines.
             Vector3 localHorizontalVelocity = transform.InverseTransformDirection(rb.linearVelocity);
@@ -374,7 +388,8 @@ public class DroneCoverageAgent : Agent
 
         if (coverageTracker.Coverage01 >= requiredCoverage)
         {
-            AddReward(completionReward);
+            float efficiencyBonus = Mathf.Clamp01(1f - ((float)StepCount / Mathf.Max(1, MaxStep)));
+            AddReward(completionReward + (efficiencyBonus * completionEfficiencyBonus));
             EndEpisodeWithOutcome("Completed");
             return;
         }
@@ -490,6 +505,14 @@ public class DroneCoverageAgent : Agent
 
     private void UpdateEpisodeCurriculum()
     {
+        if (useFixedZoneSize)
+        {
+            activeZoneWidthRange = new Vector2(fixedZoneSize.x, fixedZoneSize.x);
+            activeZoneDepthRange = new Vector2(fixedZoneSize.y, fixedZoneSize.y);
+            currentCurriculumProgress01 = 1f;
+            return;
+        }
+
         float progressFromEpisodes = useZoneSizeCurriculum && curriculumRampEpisodes > 0
             ? Mathf.Clamp01((float)episodeCounter / curriculumRampEpisodes)
             : 1f;
@@ -611,6 +634,29 @@ public class DroneCoverageAgent : Agent
         }
 
         EndEpisode();
+    }
+
+    private void AddSensorFootprintCornerObservations(VectorSensor sensor)
+    {
+        Vector3[] corners = coverageTracker.GetSensorFootprintCorners();
+        if (corners != null && corners.Length == 4)
+        {
+            foreach (Vector3 corner in corners)
+            {
+                Vector4 cornerBounds = coverageTracker.GetNormalizedDistancesToBounds(corner);
+                sensor.AddObservation(cornerBounds.x);
+                sensor.AddObservation(cornerBounds.y);
+                sensor.AddObservation(cornerBounds.z);
+                sensor.AddObservation(cornerBounds.w);
+            }
+
+            return;
+        }
+
+        for (int i = 0; i < 16; i++)
+        {
+            sensor.AddObservation(0f);
+        }
     }
 
     private void AddLocalCoverageObservations(VectorSensor sensor)

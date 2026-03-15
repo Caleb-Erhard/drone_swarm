@@ -21,12 +21,12 @@
 4. In `DroneCoverageAgent`:
    - Assign `Drone Controller` (self).
    - Assign `Coverage Tracker`.
-   - Keep `Randomize Zone Size Each Episode` enabled.
-   - Keep `Use Zone Size Curriculum` enabled (default) so training starts with easier zone sizes and ramps up.
+   - Keep `Use Fixed Zone Size` enabled.
+   - Set `Fixed Zone Size` to `250 x 200`.
    - For boundary entry behavior, keep `Spawn At Zone Edge` enabled (default).
 5. In `Behavior Parameters`:
    - `Behavior Name`: `DroneCoverage`
-   - `Vector Observation Size`: `41`
+   - `Vector Observation Size`: `57`
    - `Max Step`: `4000`
    - `Space Size`: `3` continuous actions
    - `Behavior Type`: `Default` for training, `Inference Only` after exporting ONNX
@@ -63,7 +63,7 @@ mlagents-learn Assets/ML-Agents/Configs/drone_coverage_ppo_bc.yaml --run-id=dron
 
 Notes:
 - Unity may auto-create suffixed files like `droneexpert_0.demo`, `droneexpert_1.demo` when a base name already exists.
-- Keep `demo_path` in `drone_coverage_ppo_bc.yaml` pointed to the specific demo file you want to use.
+- Re-record demos after observation-space changes before re-enabling `demo_path` in `drone_coverage_ppo_bc.yaml`.
 - Current BC config points to: `Assets/ML-Agents/Demonstrations/droneexpert_0.demo`.
 
 ## 6. What To Watch
@@ -86,9 +86,10 @@ Notes:
 - If it loops over old ground:
   - Increase `overlapPenalty`, `revisitingPenalty`, and `frontierDistanceRewardScale`.
 
-## 8. Variable Search Zones
-- Keep `Randomize Zone Size Each Episode` enabled during training.
-- Keep `Max Expected Zone Dimension` at or above your largest curriculum target (`150+` currently).
+## 8. Fixed Search Zone (Recommended)
+- Train on a single `250 x 200` zone (max swarm-size partition size).
+- Keep `Randomize Zone Size Each Episode` and `Use Zone Size Curriculum` disabled while using fixed-size training.
+- Keep `Max Expected Zone Dimension` at or above `250`.
 - Retrain from scratch whenever observation size or reward terms change.
 
 ## 9. Curriculum/Memory Notes

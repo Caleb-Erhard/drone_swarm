@@ -155,7 +155,7 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 100, y: 2, z: 100}
+  m_Size: {x: 250, y: 2, z: 200}
   m_Center: {x: 0, y: 0, z: 0}
 --- !u!4 &134215017
 Transform:
@@ -274,7 +274,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3a5c9d521e5ef4759a8246a07d52221e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.ML-Agents::Unity.MLAgents.DecisionRequester
-  DecisionPeriod: 1
+  DecisionPeriod: 5
   DecisionStep: 0
   TakeActionsBetweenDecisions: 1
 --- !u!114 &153458815
@@ -295,20 +295,22 @@ MonoBehaviour:
   MaxStep: 7000
   droneController: {fileID: 0}
   coverageTracker: {fileID: 0}
-  requiredCoverage: 0.8
+  requiredCoverage: 0.98
   maxDistanceOutsideZone: 3
   spawnAltitudeOffset: 0
   episodeStepLimit: 7000
   logEpisodeEndReason: 1
-  randomizeZoneSizeEachEpisode: 1
-  zoneWidthRange: {x: 150, y: 500}
-  zoneDepthRange: {x: 150, y: 500}
-  useZoneSizeCurriculum: 1
+  useFixedZoneSize: 1
+  fixedZoneSize: {x: 250, y: 200}
+  randomizeZoneSizeEachEpisode: 0
+  zoneWidthRange: {x: 250, y: 250}
+  zoneDepthRange: {x: 200, y: 200}
+  useZoneSizeCurriculum: 0
   curriculumRampEpisodes: 5000
-  curriculumStartZoneWidthRange: {x: 150, y: 200}
-  curriculumStartZoneDepthRange: {x: 150, y: 200}
-  curriculumFinalZoneWidthRange: {x: 350, y: 500}
-  curriculumFinalZoneDepthRange: {x: 300, y: 500}
+  curriculumStartZoneWidthRange: {x: 250, y: 250}
+  curriculumStartZoneDepthRange: {x: 200, y: 200}
+  curriculumFinalZoneWidthRange: {x: 250, y: 250}
+  curriculumFinalZoneDepthRange: {x: 200, y: 200}
   scaleEpisodeStepLimitByZoneArea: 1
   referenceZoneWidth: 250
   referenceZoneDepth: 200
@@ -325,17 +327,18 @@ MonoBehaviour:
   outsideZonePenalty: 0.01
   collisionPenalty: 2.5
   completionReward: 4
-  timeoutPenalty: 0.75
-  revisitingPenalty: 0
-  overlapPenalty: 0
+  completionEfficiencyBonus: 10
+  timeoutPenalty: 2
+  revisitingPenalty: 0.0003
+  overlapPenalty: 0.005
   turnInputPenalty: 0
-  yawRatePenalty: 0
+  yawRatePenalty: 0.0005
   overlapTurnPenalty: 0
-  diagonalMotionPenalty: 0
-  frontierAlignmentRewardScale: 0
+  diagonalMotionPenalty: 0.001
+  frontierAlignmentRewardScale: 0.0005
   frontierDistanceRewardScale: 0
   targetExplorationSpeed: 10
-  explorationSpeedReward: 0.002
+  explorationSpeedReward: 0.1
   lowSpeedOverlapPenalty: 0
   actionSmoothing: 1
   actionDeadzone: 0.05
@@ -363,7 +366,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Unity.ML-Agents::Unity.MLAgents.Policies.BehaviorParameters
   m_BrainParameters:
-    VectorObservationSize: 41
+    VectorObservationSize: 57
     NumStackedVectorObservations: 1
     m_ActionSpec:
       m_NumContinuousActions: 3
@@ -374,7 +377,7 @@ MonoBehaviour:
     hasUpgradedBrainParametersWithActionSpec: 1
   m_Model: {fileID: 0}
   m_InferenceDevice: 0
-  m_BehaviorType: 0
+  m_BehaviorType: 1
   m_BehaviorName: DroneCoverage
   TeamId: 0
   m_UseChildSensors: 1
@@ -393,9 +396,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f2902496c0120472b90269f94a0aec7e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.ML-Agents::Unity.MLAgents.Demonstrations.DemonstrationRecorder
-  Record: 0
+  Record: 1
   NumStepsToRecord: 0
-  DemonstrationName: droneexpert_active
+  DemonstrationName: drone_record
   DemonstrationDirectory: Assets/ML-Agents/Demonstrations
 --- !u!1001 &231711174
 PrefabInstance:
