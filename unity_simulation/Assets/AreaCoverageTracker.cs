@@ -81,6 +81,7 @@ public class AreaCoverageTracker : MonoBehaviour
     public int TotalCells => totalCells;
     public int VisitedCells => visitedCount;
     public int UnvisitedCells => Mathf.Max(0, totalCells - visitedCount);
+    public BoxCollider SearchZoneCollider => searchZone;
 
     private void Awake()
     {
@@ -337,6 +338,46 @@ public class AreaCoverageTracker : MonoBehaviour
         {
             coverageCamera = sensorTransform.GetComponentInChildren<Camera>(true);
         }
+    }
+
+    public void SetSearchZone(BoxCollider zone)
+    {
+        searchZone = zone;
+        RebuildGrid();
+    }
+
+    public void ConfigureDebugVisualization(bool showVisitedCellFill, bool showSensorFootprintOutline, int footprintSegments = -1)
+    {
+        drawVisitedCells = showVisitedCellFill;
+        drawSensorFootprint = showSensorFootprintOutline;
+
+        if (footprintSegments > 0)
+        {
+            sensorFootprintSegments = Mathf.Max(4, footprintSegments);
+        }
+    }
+
+    public void CopySettingsFrom(AreaCoverageTracker source)
+    {
+        if (source == null || ReferenceEquals(source, this))
+        {
+            return;
+        }
+
+        cellSize = source.cellSize;
+        sensorRadius = source.sensorRadius;
+        coverageShape = source.coverageShape;
+        sensorRelativePlaneDistance = source.sensorRelativePlaneDistance;
+        drawVisitedCells = source.drawVisitedCells;
+        drawSensorFootprint = source.drawSensorFootprint;
+        sensorFootprintSegments = source.sensorFootprintSegments;
+        sensorFootprintGroundOffset = source.sensorFootprintGroundOffset;
+        zoneColor = source.zoneColor;
+        visitedColor = source.visitedColor;
+        sensorFootprintColor = source.sensorFootprintColor;
+        coverageCamera = null;
+        sensorTransform = null;
+        RebuildGrid();
     }
 
     public void ConfigureSearchZone(Vector2 centerXZ, Vector2 sizeXZ)

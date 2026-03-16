@@ -10,6 +10,14 @@ public class DroneCoverageAgent : Agent
     private const int LocalCoverageSamplesPerAxis = 5;
     private const int ExpectedVectorObservationSize = 57;
 
+    public enum MissionSearchOutcome
+    {
+        Completed,
+        OutOfBounds,
+        Collision,
+        Timeout
+    }
+
     [Header("References")]
     [SerializeField] private LockedAltitudeDroneController droneController;
     [SerializeField] private AreaCoverageTracker coverageTracker;
@@ -100,6 +108,18 @@ public class DroneCoverageAgent : Agent
     private float currentCurriculumProgress01;
     private Vector3 smoothedAction;
     private Vector2 previousPlanarPosition;
+    private bool runtimeMissionMode;
+    private bool runtimeSearchActive;
+
+    public event System.Action<DroneCoverageAgent, MissionSearchOutcome> MissionSearchEnded;
+
+    public AreaCoverageTracker CoverageTracker => coverageTracker;
+    public float CoverageRatio => coverageTracker != null ? coverageTracker.Coverage01 : 0f;
+    public bool RuntimeSearchActive => runtimeSearchActive;
+    public bool SpawnAtZoneEdge => spawnAtZoneEdge;
+    public float EdgeSpawnInset => edgeSpawnInset;
+    public float EdgeSpawnOutsideOffset => edgeSpawnOutsideOffset;
+    public bool FaceZoneCenterOnEdgeSpawn => faceZoneCenterOnEdgeSpawn;
 
     private void OnValidate()
     {
@@ -184,7 +204,7 @@ public class DroneCoverageAgent : Agent
         currentCurriculumProgress01 = 1f;
 
         // Prevent infinite episodes when scene MaxStep is left at 0.
-        if (MaxStep <= 0)
+        if (MaxStep <= 0 && !runtimeMissionMode)
         {
             MaxStep = episodeStepLimit;
         }
@@ -197,8 +217,103 @@ public class DroneCoverageAgent : Agent
         droneController.manualInputEnabled = false;
     }
 
+    public void ConfigureRuntimeMission(AreaCoverageTracker runtimeCoverageTracker)
+    {
+        if (droneController == null)
+        {
+            droneController = GetComponent<LockedAltitudeDroneController>();
+        }
+
+        if (rb == null)
+        {
+            rb = GetComponent<Rigidbody>();
+        }
+
+        coverageTracker = runtimeCoverageTracker;
+        runtimeMissionMode = true;
+        runtimeSearchActive = false;
+        collisionDetected = false;
+        ResetFrontierDistanceCache();
+        smoothedAction = Vector3.zero;
+        previousPlanarPosition = new Vector2(transform.position.x, transform.position.z);
+
+        if (coverageTracker != null)
+        {
+            coverageTracker.SetSensorTransform(transform);
+        }
+
+        MaxStep = 0;
+
+        if (droneController != null)
+        {
+            droneController.manualInputEnabled = false;
+            droneController.ClearControlInputs();
+        }
+    }
+
+    public void SetRuntimeSearchZone(Vector2 centerXZ, Vector2 sizeXZ)
+    {
+        if (coverageTracker == null)
+        {
+            return;
+        }
+
+        coverageTracker.ConfigureSearchZone(centerXZ, sizeXZ);
+        coverageTracker.ResetCoverage();
+        coverageTracker.SetSensorTransform(transform);
+        previousPlanarPosition = new Vector2(transform.position.x, transform.position.z);
+    }
+
+    public void BeginRuntimeSearch()
+    {
+        if (coverageTracker == null)
+        {
+            return;
+        }
+
+        runtimeMissionMode = true;
+        runtimeSearchActive = true;
+        collisionDetected = false;
+        ResetFrontierDistanceCache();
+        smoothedAction = Vector3.zero;
+        previousPlanarPosition = new Vector2(transform.position.x, transform.position.z);
+        coverageTracker.SetSensorTransform(transform);
+        coverageTracker.ResetCoverage();
+        coverageTracker.MarkCoverage(transform.position);
+        CacheFrontierDistance();
+        RequestDecision();
+    }
+
+    public void StopRuntimeSearch()
+    {
+        runtimeSearchActive = false;
+        collisionDetected = false;
+        ResetFrontierDistanceCache();
+        smoothedAction = Vector3.zero;
+
+        if (droneController != null)
+        {
+            droneController.ClearControlInputs();
+        }
+    }
+
     public override void OnEpisodeBegin()
     {
+        if (runtimeMissionMode)
+        {
+            collisionDetected = false;
+            ResetFrontierDistanceCache();
+            smoothedAction = Vector3.zero;
+            previousPlanarPosition = new Vector2(transform.position.x, transform.position.z);
+
+            if (coverageTracker != null)
+            {
+                coverageTracker.SetSensorTransform(transform);
+            }
+
+            return;
+        }
+
         if (coverageTracker == null || droneController == null)
         {
             Debug.LogError("DroneCoverageAgent is missing references.");
@@ -275,6 +390,11 @@ public class DroneCoverageAgent : Agent
 
     public override void OnActionReceived(ActionBuffers actions)
     {
+        if (runtimeMissionMode && !runtimeSearchActive)
+        {
+            return;
+        }
+
         var action = actions.ContinuousActions;
 
         Vector3 rawAction = new Vector3(
@@ -372,7 +492,15 @@ public class DroneCoverageAgent : Agent
             if (outsideDistance > maxDistanceOutsideZone)
             {
                 AddReward(-collisionPenalty);
-                EndEpisodeWithOutcome("OutOfBounds", outsideDistance);
+                if (runtimeMissionMode)
+                {
+                    NotifyMissionSearchEnded(MissionSearchOutcome.OutOfBounds);
+                }
+                else
+                {
+                    EndEpisodeWithOutcome("OutOfBounds", outsideDistance);
+                }
+
                 return;
             }
         }
@@ -382,7 +510,15 @@ public class DroneCoverageAgent : Agent
         if (collisionDetected)
         {
             AddReward(-collisionPenalty);
-            EndEpisodeWithOutcome("Collision");
+            if (runtimeMissionMode)
+            {
+                NotifyMissionSearchEnded(MissionSearchOutcome.Collision);
+            }
+            else
+            {
+                EndEpisodeWithOutcome("Collision");
+            }
+
             return;
         }
 
@@ -390,15 +526,30 @@ public class DroneCoverageAgent : Agent
         {
             float efficiencyBonus = Mathf.Clamp01(1f - ((float)StepCount / Mathf.Max(1, MaxStep)));
             AddReward(completionReward + (efficiencyBonus * completionEfficiencyBonus));
-            EndEpisodeWithOutcome("Completed");
+            if (runtimeMissionMode)
+            {
+                NotifyMissionSearchEnded(MissionSearchOutcome.Completed);
+            }
+            else
+            {
+                EndEpisodeWithOutcome("Completed");
+            }
+
             return;
         }
 
-        if (StepCount >= MaxStep)
+        if (MaxStep > 0 && StepCount >= MaxStep)
         {
             AddReward(-timeoutPenalty);
             Academy.Instance.StatsRecorder.Add("Coverage/TimedOutEpisodes", 1f);
-            EndEpisodeWithOutcome("Timeout");
+            if (runtimeMissionMode)
+            {
+                NotifyMissionSearchEnded(MissionSearchOutcome.Timeout);
+            }
+            else
+            {
+                EndEpisodeWithOutcome("Timeout");
+            }
         }
     }
 
@@ -634,6 +785,19 @@ public class DroneCoverageAgent : Agent
         }
 
         EndEpisode();
+    }
+
+    private void NotifyMissionSearchEnded(MissionSearchOutcome outcome)
+    {
+        runtimeSearchActive = false;
+        collisionDetected = false;
+
+        if (droneController != null)
+        {
+            droneController.ClearControlInputs();
+        }
+
+        MissionSearchEnded?.Invoke(this, outcome);
     }
 
     private void AddSensorFootprintCornerObservations(VectorSensor sensor)

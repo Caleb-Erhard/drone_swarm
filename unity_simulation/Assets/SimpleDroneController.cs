@@ -23,6 +23,9 @@ public class LockedAltitudeDroneController : MonoBehaviour
     public bool applyVisualTilt = false;
     public Transform visualTiltTransform;
     public float tiltSmoothness = 6f;
+
+    [Header("Debug")]
+    public bool showDebugGui = true;
     
     private Rigidbody rb;
     private float currentGroundHeight = 0f;
@@ -195,6 +198,11 @@ public class LockedAltitudeDroneController : MonoBehaviour
 
     void OnGUI()
     {
+        if (!showDebugGui || rb == null)
+        {
+            return;
+        }
+
         float currentAltitude = transform.position.y - currentGroundHeight;
         GUI.Label(new Rect(10, 10, 400, 20), $"Altitude: {currentAltitude:F1}m / Target: {targetAltitude}m");
         GUI.Label(new Rect(10, 30, 400, 20), $"Speed: {new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z).magnitude:F1} m/s / Max: {maxSpeed} m/s");
