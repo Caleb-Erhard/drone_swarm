@@ -10,8 +10,7 @@ public class TruckTrafficManager : MonoBehaviour
     private const float SurfaceOffsetPadding = 0.05f;
     private const float MinimumRouteWidth = 220f;
     private const float MinimumRouteDepth = 220f;
-    private const float BaseTruckSpeed = 12.5f;
-    private const float TruckSpeedVariance = 2.5f;
+    private static readonly Vector2 DefaultTruckSpeedRange = new Vector2(10f, 15f);
 
     private readonly List<GameObject> activeTrucks = new List<GameObject>();
     private readonly List<SplineContainer> activeRoutes = new List<SplineContainer>();
@@ -34,7 +33,14 @@ public class TruckTrafficManager : MonoBehaviour
         public Vector2 Size { get; }
     }
 
-    public int StartTraffic(IReadOnlyList<GameObject> truckTemplates, int truckCount, Vector2 missionCenter, Vector2 missionAreaSize)
+    public IReadOnlyList<GameObject> ActiveTrucks => activeTrucks;
+
+    public int StartTraffic(
+        IReadOnlyList<GameObject> truckTemplates,
+        int truckCount,
+        Vector2 missionCenter,
+        Vector2 missionAreaSize,
+        Vector2? truckSpeedRange = null)
     {
         StopTraffic();
 
@@ -60,6 +66,9 @@ public class TruckTrafficManager : MonoBehaviour
         int[] routeUseCounts = new int[routeCount];
         int targetPerRoute = Mathf.Max(1, Mathf.CeilToInt(truckCount / (float)routeCount));
         int routeStartIndex = Random.Range(0, routeCount);
+        Vector2 resolvedSpeedRange = truckSpeedRange ?? DefaultTruckSpeedRange;
+        float minTruckSpeed = Mathf.Max(4f, Mathf.Min(resolvedSpeedRange.x, resolvedSpeedRange.y));
+        float maxTruckSpeed = Mathf.Max(minTruckSpeed, Mathf.Max(resolvedSpeedRange.x, resolvedSpeedRange.y));
 
         for (int truckIndex = 0; truckIndex < truckCount; truckIndex++)
         {
@@ -77,7 +86,7 @@ public class TruckTrafficManager : MonoBehaviour
                 truckObject,
                 activeRoutes[routeIndex],
                 startOffset,
-                BaseTruckSpeed + Random.Range(-TruckSpeedVariance, TruckSpeedVariance));
+                Random.Range(minTruckSpeed, maxTruckSpeed));
 
             RegisterTruckColliders(truckObject);
             activeTrucks.Add(truckObject);
@@ -198,6 +207,9 @@ public class TruckTrafficManager : MonoBehaviour
 
         TruckTerrainFollower terrainFollower = truckObject.AddComponent<TruckTerrainFollower>();
         terrainFollower.Configure(surfaceHeightOffset);
+
+        TruckTarget truckTarget = truckObject.GetComponent<TruckTarget>() ?? truckObject.AddComponent<TruckTarget>();
+        truckTarget.ResetTrackingState();
 
         truckObject.SetActive(true);
         splineAnimate.Restart(true);

@@ -47,16 +47,22 @@ public class DroneTrackingSensorFootprint : MonoBehaviour
 
     public bool IsPointInView(Vector3 worldPoint)
     {
+        return IsPointInView(worldPoint, 0f);
+    }
+
+    public bool IsPointInView(Vector3 worldPoint, float viewportPadding)
+    {
         Camera activeCamera = ResolveCoverageCamera();
         if (activeCamera == null)
         {
             return false;
         }
 
+        viewportPadding = Mathf.Max(0f, viewportPadding);
         Vector3 viewportPoint = activeCamera.WorldToViewportPoint(worldPoint);
         return viewportPoint.z > 0f &&
-               viewportPoint.x >= 0f && viewportPoint.x <= 1f &&
-               viewportPoint.y >= 0f && viewportPoint.y <= 1f;
+               viewportPoint.x >= -viewportPadding && viewportPoint.x <= 1f + viewportPadding &&
+               viewportPoint.y >= -viewportPadding && viewportPoint.y <= 1f + viewportPadding;
     }
 
     public bool TryGetGroundFootprint(out Vector3[] footprintCorners, out int cornerCount)
@@ -73,6 +79,14 @@ public class DroneTrackingSensorFootprint : MonoBehaviour
         footprintCorners = cameraGroundFootprintCorners;
         cornerCount = cameraGroundFootprintCorners.Length;
         return true;
+    }
+
+    public void SetSensorTransform(Transform sensor)
+    {
+        sensorTransform = sensor != null ? sensor : transform;
+        coverageCamera = sensorTransform != null
+            ? sensorTransform.GetComponentInChildren<Camera>(true)
+            : null;
     }
 
     private void ResolveReferences()

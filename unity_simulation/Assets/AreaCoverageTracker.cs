@@ -45,6 +45,7 @@ public class AreaCoverageTracker : MonoBehaviour
     [SerializeField, Min(0.1f)] private float sensorRelativePlaneDistance = 40f;
 
     [Header("Debug")]
+    [SerializeField] private bool drawZoneBounds = true;
     [SerializeField] private bool drawVisitedCells = true;
     [SerializeField] private bool drawSensorFootprint = true;
     [SerializeField, Min(4)] private int sensorFootprintSegments = 48;
@@ -331,13 +332,31 @@ public class AreaCoverageTracker : MonoBehaviour
         return TryUpdateCameraGroundFootprint() ? cameraGroundFootprintCorners : null;
     }
 
+    public bool IsPointInsideSensorFootprint(Vector3 worldPoint)
+    {
+        if (sensorTransform == null)
+        {
+            return false;
+        }
+
+        if (coverageShape == CoverageShape.CameraGroundFootprint && TryUpdateCameraGroundFootprint() && hasCameraGroundFootprint)
+        {
+            return IsPointInsidePolygonXZ(worldPoint.x, worldPoint.z, cameraGroundFootprintCorners, cameraGroundFootprintCorners.Length);
+        }
+
+        Vector3 sensorPosition = sensorTransform.position;
+        float dx = worldPoint.x - sensorPosition.x;
+        float dz = worldPoint.z - sensorPosition.z;
+        float radius = Mathf.Max(0.1f, currentCoverageRadius > 0f ? currentCoverageRadius : sensorRadius);
+        return (dx * dx) + (dz * dz) <= radius * radius;
+    }
+
     public void SetSensorTransform(Transform sensor)
     {
         sensorTransform = sensor;
-        if (coverageCamera == null && sensorTransform != null)
-        {
-            coverageCamera = sensorTransform.GetComponentInChildren<Camera>(true);
-        }
+        coverageCamera = sensorTransform != null
+            ? sensorTransform.GetComponentInChildren<Camera>(true)
+            : null;
     }
 
     public void SetSearchZone(BoxCollider zone)
@@ -346,8 +365,13 @@ public class AreaCoverageTracker : MonoBehaviour
         RebuildGrid();
     }
 
-    public void ConfigureDebugVisualization(bool showVisitedCellFill, bool showSensorFootprintOutline, int footprintSegments = -1)
+    public void ConfigureDebugVisualization(
+        bool showVisitedCellFill,
+        bool showSensorFootprintOutline,
+        int footprintSegments = -1,
+        bool showZoneBounds = true)
     {
+        drawZoneBounds = showZoneBounds;
         drawVisitedCells = showVisitedCellFill;
         drawSensorFootprint = showSensorFootprintOutline;
 
@@ -368,6 +392,7 @@ public class AreaCoverageTracker : MonoBehaviour
         sensorRadius = source.sensorRadius;
         coverageShape = source.coverageShape;
         sensorRelativePlaneDistance = source.sensorRelativePlaneDistance;
+        drawZoneBounds = source.drawZoneBounds;
         drawVisitedCells = source.drawVisitedCells;
         drawSensorFootprint = source.drawSensorFootprint;
         sensorFootprintSegments = source.sensorFootprintSegments;
@@ -882,8 +907,11 @@ public class AreaCoverageTracker : MonoBehaviour
         }
 
         Bounds drawBounds = searchZone.bounds;
-        Gizmos.color = zoneColor;
-        Gizmos.DrawWireCube(drawBounds.center, drawBounds.size);
+        if (drawZoneBounds)
+        {
+            Gizmos.color = zoneColor;
+            Gizmos.DrawWireCube(drawBounds.center, drawBounds.size);
+        }
 
         if (drawVisitedCells && totalCells > 0 && visitedCells.Length == totalCells)
         {

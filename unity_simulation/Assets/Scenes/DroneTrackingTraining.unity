@@ -285,9 +285,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DroneTrackingAgent
   agentParameters:
-    maxStep: 2000
+    maxStep: 5000
   hasUpgradedFromAgentParameters: 1
-  MaxStep: 2000
+  MaxStep: 5000
   droneController: {fileID: 0}
   rb: {fileID: 0}
   trainingManager: {fileID: 0}
@@ -302,8 +302,8 @@ MonoBehaviour:
   outOfBoundsGraceDistance: 6
   maxExpectedTargetSpeed: 16
   maxExpectedOwnSpeed: 18
-  endEpisodeAfterStableAcquire: 1
-  stableAcquireDuration: 3.5
+  endEpisodeAfterStableAcquire: 0
+  stableAcquireDuration: 8
   stableAcquireCenterednessThreshold: 0.72
   forwardYawOnly: 1
   stepPenalty: 0.0005
@@ -311,7 +311,7 @@ MonoBehaviour:
   inRangeReward: 0.01
   distanceRewardScale: 0.03
   frontAlignmentReward: 0.02
-  keepUpRewardScale: 0.01
+  keepUpRewardScale: 0.02
   lostSightFrontAlignmentMultiplier: 0.7
   yawPenalty: 0.0002
   stableAcquireReward: 1
@@ -1150,3 +1150,4 @@ SceneRoots:
   - {fileID: 1010992017}
   - {fileID: 1964438810}
   - {fileID: 796517979}
+

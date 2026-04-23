@@ -7,12 +7,20 @@ public class TruckTarget : MonoBehaviour
     [SerializeField] private Transform trackingPointOverride;
     [SerializeField, Min(0f)] private float trackingPointHeightOffset = 1.5f;
     [SerializeField] private bool useColliderBoundsForTrackingPoint = true;
+    [SerializeField] private string preferredTrackingColliderName = "TruckBody_Col";
+    [SerializeField] private string fallbackTrackingColliderName = "Collider";
+    [SerializeField, Min(0f)] private float velocitySmoothing = 10f;
+    [SerializeField, Min(0.0001f)] private float minimumSampleInterval = 0.008f;
+    [SerializeField, Min(0f)] private float minimumMovementDelta = 0.0025f;
 
     private int currentTrackerDroneId = -1;
     private Vector3 previousPosition;
+    private float previousSampleTime;
     private Vector3 currentVelocity;
     private bool hasPreviousPosition;
     private Collider[] cachedColliders;
+    private Rigidbody cachedRigidbody;
+    private Collider preferredTrackingCollider;
 
     public int TruckId => truckId;
     public int CurrentTrackerDroneId => currentTrackerDroneId;
@@ -22,21 +30,36 @@ public class TruckTarget : MonoBehaviour
     private void OnEnable()
     {
         CacheColliders();
+        if (cachedRigidbody == null)
+        {
+            cachedRigidbody = GetComponent<Rigidbody>();
+        }
+
         ResetTrackingState();
     }
 
     private void FixedUpdate()
     {
-        if (!hasPreviousPosition)
+        if (cachedRigidbody != null && !cachedRigidbody.isKinematic)
         {
+            currentVelocity = cachedRigidbody.linearVelocity;
             previousPosition = transform.position;
+            previousSampleTime = Time.time;
             hasPreviousPosition = true;
-            currentVelocity = Vector3.zero;
             return;
         }
 
-        currentVelocity = (transform.position - previousPosition) / Mathf.Max(Time.fixedDeltaTime, 0.0001f);
-        previousPosition = transform.position;
+        SampleTransformVelocity(Time.time);
+    }
+
+    private void LateUpdate()
+    {
+        if (cachedRigidbody != null && !cachedRigidbody.isKinematic)
+        {
+            return;
+        }
+
+        SampleTransformVelocity(Time.time);
     }
 
     public void ResetTrackingState()
@@ -44,6 +67,7 @@ public class TruckTarget : MonoBehaviour
         currentTrackerDroneId = -1;
         currentVelocity = Vector3.zero;
         previousPosition = transform.position;
+        previousSampleTime = Time.time;
         hasPreviousPosition = true;
     }
 
@@ -88,6 +112,13 @@ public class TruckTarget : MonoBehaviour
     {
         CacheColliders();
 
+        Collider resolvedTrackingCollider = ResolvePreferredTrackingCollider();
+        if (resolvedTrackingCollider != null && resolvedTrackingCollider.enabled)
+        {
+            bounds = resolvedTrackingCollider.bounds;
+            return true;
+        }
+
         bool found = false;
         bounds = default;
         for (int i = 0; i < cachedColliders.Length; i++)
@@ -117,6 +148,92 @@ public class TruckTarget : MonoBehaviour
         if (cachedColliders == null || cachedColliders.Length == 0)
         {
             cachedColliders = GetComponentsInChildren<Collider>(true);
+            preferredTrackingCollider = null;
         }
+    }
+
+    private Collider ResolvePreferredTrackingCollider()
+    {
+        CacheColliders();
+
+        if (preferredTrackingCollider != null)
+        {
+            return preferredTrackingCollider;
+        }
+
+        preferredTrackingCollider = FindNamedCollider(preferredTrackingColliderName);
+        if (preferredTrackingCollider != null)
+        {
+            return preferredTrackingCollider;
+        }
+
+        preferredTrackingCollider = FindNamedCollider(fallbackTrackingColliderName);
+        return preferredTrackingCollider;
+    }
+
+    private Collider FindNamedCollider(string colliderName)
+    {
+        if (string.IsNullOrWhiteSpace(colliderName) || cachedColliders == null)
+        {
+            return null;
+        }
+
+        for (int i = 0; i < cachedColliders.Length; i++)
+        {
+            Collider colliderComponent = cachedColliders[i];
+            if (colliderComponent == null)
+            {
+                continue;
+            }
+
+            if (string.Equals(colliderComponent.gameObject.name, colliderName, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return colliderComponent;
+            }
+        }
+
+        return null;
+    }
+
+    private void SampleTransformVelocity(float sampleTime)
+    {
+        if (!hasPreviousPosition)
+        {
+            previousPosition = transform.position;
+            previousSampleTime = sampleTime;
+            hasPreviousPosition = true;
+            currentVelocity = Vector3.zero;
+            return;
+        }
+
+        float deltaTime = sampleTime - previousSampleTime;
+        if (deltaTime < minimumSampleInterval)
+        {
+            return;
+        }
+
+        Vector3 currentPosition = transform.position;
+        Vector3 deltaPosition = currentPosition - previousPosition;
+        float minimumMovementDeltaSq = minimumMovementDelta * minimumMovementDelta;
+        if (deltaPosition.sqrMagnitude <= minimumMovementDeltaSq)
+        {
+            previousPosition = currentPosition;
+            previousSampleTime = sampleTime;
+            return;
+        }
+
+        Vector3 rawVelocity = deltaPosition / Mathf.Max(deltaTime, 0.0001f);
+        if (velocitySmoothing <= 0f || currentVelocity.sqrMagnitude <= 0.0001f)
+        {
+            currentVelocity = rawVelocity;
+        }
+        else
+        {
+            float blend = 1f - Mathf.Exp(-velocitySmoothing * deltaTime);
+            currentVelocity = Vector3.Lerp(currentVelocity, rawVelocity, blend);
+        }
+
+        previousPosition = currentPosition;
+        previousSampleTime = sampleTime;
     }
 }

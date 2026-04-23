@@ -43,6 +43,10 @@ public class DroneDemoMissionController : MonoBehaviour
     private float arrivalDistance = 18f;
     private float slowDownDistance = 90f;
     private float fullTurnAngle = 45f;
+    private float runtimeSearchElapsedTime;
+    private const float RuntimeCoverageThresholdToAdvance = 0.94f;
+    private const float RuntimeMinimumSearchTime = 6f;
+    private const float RuntimeMaxSearchTimePerZone = 32f;
     private int currentZoneIndex;
     private float searchMaxSpeed;
     private float searchAcceleration;
@@ -58,6 +62,8 @@ public class DroneDemoMissionController : MonoBehaviour
     public int AssignedZoneCount => assignedZones.Count;
     public int CurrentZoneNumber => assignedZones.Count == 0 ? 0 : assignedZones[currentZoneIndex].ZoneId + 1;
     public string DroneLabel => droneLabel;
+    public bool IsSearching => missionState == MissionState.Search;
+    public bool IsMissionActive => missionState != MissionState.Idle;
 
     public void Configure(
         DroneCoverageAgent coverageAgent,
@@ -70,7 +76,7 @@ public class DroneDemoMissionController : MonoBehaviour
         agent = coverageAgent != null ? coverageAgent : GetComponent<DroneCoverageAgent>();
         droneController = controller != null ? controller : GetComponent<LockedAltitudeDroneController>();
         droneLabel = string.IsNullOrWhiteSpace(label) ? gameObject.name : label;
-        transitSpeed = Mathf.Max(14.5f, transitSpeedMetersPerSecond);
+        transitSpeed = Mathf.Max(1f, transitSpeedMetersPerSecond);
 
         assignedZones.Clear();
         if (zones != null)
@@ -106,6 +112,8 @@ public class DroneDemoMissionController : MonoBehaviour
             return;
         }
 
+        agent.MissionSearchEnded -= HandleMissionSearchEnded;
+        agent.MissionSearchEnded += HandleMissionSearchEnded;
         StartTransitToCurrentZone();
     }
 
@@ -127,8 +135,64 @@ public class DroneDemoMissionController : MonoBehaviour
         }
     }
 
+    public void SetAssignedZones(IEnumerable<DroneDemoZone> zones, float transitSpeedMetersPerSecond)
+    {
+        int previousZoneId = TryGetCurrentZone(out DroneDemoZone currentZone)
+            ? currentZone.ZoneId
+            : -1;
+        MissionState previousState = missionState;
+
+        transitSpeed = Mathf.Max(1f, transitSpeedMetersPerSecond);
+        assignedZones.Clear();
+        if (zones != null)
+        {
+            assignedZones.AddRange(zones);
+        }
+
+        if (assignedZones.Count == 0)
+        {
+            StopMission();
+            return;
+        }
+
+        int nextZoneIndex = previousZoneId >= 0
+            ? FindAssignedZoneIndex(previousZoneId)
+            : -1;
+        if (nextZoneIndex < 0)
+        {
+            nextZoneIndex = FindNearestAssignedZoneIndex();
+        }
+
+        currentZoneIndex = Mathf.Clamp(nextZoneIndex, 0, assignedZones.Count - 1);
+
+        if (previousState == MissionState.Idle)
+        {
+            StartMission();
+            return;
+        }
+
+        if (previousZoneId >= 0 && FindAssignedZoneIndex(previousZoneId) >= 0)
+        {
+            return;
+        }
+
+        StartTransitToCurrentZone();
+    }
+
     private void Update()
     {
+        if (missionState == MissionState.Search)
+        {
+            if (agent != null && !agent.RuntimeSearchActive)
+            {
+                BeginSearch();
+                return;
+            }
+
+            UpdateRuntimeSearchProgress();
+            return;
+        }
+
         if (missionState != MissionState.Transit || droneController == null)
         {
             return;
@@ -205,8 +269,8 @@ public class DroneDemoMissionController : MonoBehaviour
     private void BeginSearch()
     {
         missionState = MissionState.Search;
+        runtimeSearchElapsedTime = 0f;
         RestoreSearchFlightProfile();
-        transform.position = new Vector3(currentTransitTarget.x, transform.position.y, currentTransitTarget.z);
 
         if (agent.FaceZoneCenterOnEdgeSpawn)
         {
@@ -246,6 +310,30 @@ public class DroneDemoMissionController : MonoBehaviour
         StartTransitToCurrentZone();
     }
 
+    private void UpdateRuntimeSearchProgress()
+    {
+        if (agent == null)
+        {
+            return;
+        }
+
+        runtimeSearchElapsedTime += Time.deltaTime;
+
+        bool hasMultipleZones = assignedZones.Count > 1;
+        bool hasEnoughCoverage = runtimeSearchElapsedTime >= RuntimeMinimumSearchTime &&
+                                 agent.CoverageRatio >= RuntimeCoverageThresholdToAdvance;
+        bool searchTakingTooLong = runtimeSearchElapsedTime >= RuntimeMaxSearchTimePerZone;
+
+        if (!hasMultipleZones || (!hasEnoughCoverage && !searchTakingTooLong))
+        {
+            return;
+        }
+
+        agent.StopRuntimeSearch();
+        currentZoneIndex = (currentZoneIndex + 1) % assignedZones.Count;
+        StartTransitToCurrentZone();
+    }
+
     private bool TryGetCurrentZone(out DroneDemoZone zone)
     {
         if (assignedZones.Count == 0 || currentZoneIndex < 0 || currentZoneIndex >= assignedZones.Count)
@@ -256,6 +344,45 @@ public class DroneDemoMissionController : MonoBehaviour
 
         zone = assignedZones[currentZoneIndex];
         return true;
+    }
+
+    private int FindAssignedZoneIndex(int zoneId)
+    {
+        for (int i = 0; i < assignedZones.Count; i++)
+        {
+            if (assignedZones[i].ZoneId == zoneId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private int FindNearestAssignedZoneIndex()
+    {
+        if (assignedZones.Count == 0)
+        {
+            return -1;
+        }
+
+        int bestIndex = 0;
+        float bestDistanceSq = float.PositiveInfinity;
+
+        for (int i = 0; i < assignedZones.Count; i++)
+        {
+            DroneDemoZone zone = assignedZones[i];
+            float dx = transform.position.x - zone.CenterXZ.x;
+            float dz = transform.position.z - zone.CenterXZ.y;
+            float distanceSq = (dx * dx) + (dz * dz);
+            if (distanceSq < bestDistanceSq)
+            {
+                bestDistanceSq = distanceSq;
+                bestIndex = i;
+            }
+        }
+
+        return bestIndex;
     }
 
     private void ApplyTransitFlightProfile()
