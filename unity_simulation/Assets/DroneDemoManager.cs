@@ -469,7 +469,7 @@ public class DroneDemoManager : MonoBehaviour
         demoRunning = false;
     }
 
-    private RuntimeDroneUnit CreateRuntimeDroneUnit(int droneIndex)
+private RuntimeDroneUnit CreateRuntimeDroneUnit(int droneIndex)
     {
         if (templateAgent == null || runtimeRoot == null)
         {
@@ -530,8 +530,37 @@ public class DroneDemoManager : MonoBehaviour
             searchAgent.SetModel("DroneCoverage", searchModel);
         }
 
+        // --- UPDATED SECTION START ---
         GameObject trackingObject = Instantiate(templateAgent.gameObject, runtimeRoot);
+
+        // 1. Get the Search Object's ID as an INT
+        int searchId = searchObject.GetInstanceID();
+
+        // 2. Setup Search Identity
+        var searchIdentity = searchObject.AddComponent<DroneIdentity>();
+        searchIdentity.originalInstanceId = searchId; // int = int
+        searchIdentity.droneLabel = droneLabel;
+        searchIdentity.isTrackingTwin = false;
+
+        // 3. Force Search Streamer
+        var searchStreamer = searchObject.GetComponentInChildren<DroneVideoStreamer>();
+        if (searchStreamer != null) searchStreamer.forceStreamId = searchId.ToString();
+
+        // 4. Setup Tracking Identity
+        var trackingIdentity = trackingObject.AddComponent<DroneIdentity>();
+        trackingIdentity.originalInstanceId = searchId; // int = int
+        trackingIdentity.droneLabel = droneLabel;
+        trackingIdentity.isTrackingTwin = true;
+
+        // 5. Force Tracking Streamer
+        var trackingStreamer = trackingObject.GetComponentInChildren<DroneVideoStreamer>();
+        if (trackingStreamer != null) trackingStreamer.forceStreamId = searchId.ToString();
+
+        // 6. Name and Ignore
         trackingObject.name = $"{droneLabel} Tracking";
+        trackingObject.AddComponent<TelemetryIgnore>();
+        // --- UPDATED SECTION END ---
+
         trackingObject.transform.SetPositionAndRotation(spawnPosition, spawnAnchorRotation);
         ConfigureRuntimeDroneObject(trackingObject);
         RemoveRecorder(trackingObject);
@@ -601,7 +630,6 @@ public class DroneDemoManager : MonoBehaviour
             BaseTrackingTurnSpeed = trackingController != null ? trackingController.turnSpeed : 85f
         };
     }
-
     private AreaCoverageTracker CreateTrackerForDrone(string droneName, Transform droneTransform)
     {
         GameObject trackerObject = new GameObject($"{droneName} Tracker");
