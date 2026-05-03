@@ -248,6 +248,12 @@ MonoBehaviour:
   groundLayer:
     serializedVersion: 2
     m_Bits: 4294967295
+  groundProbeStartHeight: 120
+  groundProbeDistance: 300
+  terrainLookAheadTime: 0.75
+  maxTerrainLookAheadDistance: 45
+  terrainProbeLateralOffset: 6
+  altitudeRecoveryBoost: 1.75
   maxSpeed: 14
   acceleration: 15
   turnSpeed: 85
@@ -259,6 +265,7 @@ MonoBehaviour:
   applyVisualTilt: 0
   visualTiltTransform: {fileID: 0}
   tiltSmoothness: 6
+  showDebugGui: 1
   movementInput: {x: 0, y: 0}
   turnInput: 0
   manualInputEnabled: 0
@@ -400,6 +407,22 @@ MonoBehaviour:
   NumStepsToRecord: 0
   DemonstrationName: drone_record
   DemonstrationDirectory: Assets/ML-Agents/Demonstrations
+--- !u!114 &153458818
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 153458802}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 88b6042bc9a5d4aa58d931eae49442e5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.ML-Agents::Unity.MLAgents.Agent
+  agentParameters:
+    maxStep: 0
+  hasUpgradedFromAgentParameters: 1
+  MaxStep: 0
 --- !u!1001 &231711174
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -457,6 +480,53 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: e446aaed2aee3634a83e77a74023cdbe, type: 3}
+--- !u!1 &302799888
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 302799890}
+  - component: {fileID: 302799889}
+  m_Layer: 0
+  m_Name: TelemetryStreamer
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &302799889
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 302799888}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4339dd1476c63834f9b49abe71049abb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TelemetryStreamer
+  serverUrl: ws://localhost:8080/ws/unity
+  updatesPerSecond: 10
+  includeInactive: 0
+--- !u!4 &302799890
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 302799888}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: -0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &330585543
 GameObject:
   m_ObjectHideFlags: 0
@@ -973,6 +1043,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 134496185276144424, guid: ce1e8e032db7c26449ae1d260b060f0c, type: 3}
       insertIndex: -1
       addedObject: {fileID: 153458817}
+    - targetCorrespondingSourceObject: {fileID: 134496185276144424, guid: ce1e8e032db7c26449ae1d260b060f0c, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 153458818}
   m_SourcePrefab: {fileID: 100100000, guid: ce1e8e032db7c26449ae1d260b060f0c, type: 3}
 --- !u!1 &832575517
 GameObject:
@@ -1172,6 +1245,7 @@ MonoBehaviour:
   coverageShape: 1
   coverageCamera: {fileID: 2083180373}
   sensorRelativePlaneDistance: 40
+  drawZoneBounds: 1
   drawVisitedCells: 1
   drawSensorFootprint: 1
   sensorFootprintSegments: 48
@@ -1484,9 +1558,11 @@ GameObject:
   - component: {fileID: 2083180373}
   - component: {fileID: 2083180372}
   - component: {fileID: 2083180371}
+  - component: {fileID: 2083180374}
+  - component: {fileID: 2083180375}
   m_Layer: 0
   m_Name: Camera
-  m_TagString: Untagged
+  m_TagString: StreamCamera
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -1609,6 +1685,46 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
+--- !u!114 &2083180374
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2083180369}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7dc9624ccafd94d47b51acd3ce9ff096, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DroneVideoStreamer
+  sourceCamera: {fileID: 0}
+  width: 640
+  height: 360
+  jpegQuality: 60
+  fps: 5
+  serverBaseUrl: ws://localhost:8080/ws/video/
+  useParentDroneInstanceId: 1
+  overrideStreamId: 
+--- !u!114 &2083180375
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2083180369}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7dc9624ccafd94d47b51acd3ce9ff096, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DroneVideoStreamer
+  sourceCamera: {fileID: 2083180373}
+  width: 640
+  height: 360
+  jpegQuality: 40
+  fps: 5
+  serverBaseUrl: ws://localhost:8080/ws/video/
+  useParentDroneInstanceId: 1
+  overrideStreamId: 
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -1629,4 +1745,4 @@ SceneRoots:
   - {fileID: 703370091}
   - {fileID: 134215017}
   - {fileID: 1053257175}
-
+  - {fileID: 302799890}

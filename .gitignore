@@ -49,3 +49,42 @@ unity_simulation/Assets/Scenes/*_before_restore_*.unity
 unity_simulation/Assets/Scenes/*_before_restore_*.unity.meta
 unity_simulation/Assets/Scenes/*_recovered_from_backup*.unity
 unity_simulation/Assets/Scenes/*_recovered_from_backup*.unity.meta
+
+# --- Node.js / frontend backend ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.npm/
+.yarn/
+.parcel-cache/
+.next/
+.nuxt/
+.svelte-kit/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.cache
+*.tgz
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# --- Go backend ---
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+coverage.out
+.coverprofile
+
+# --- Optional: local Go/Node editor stuff ---
+.vscode/
+.idea/
